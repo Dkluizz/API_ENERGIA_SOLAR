@@ -1,41 +1,28 @@
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field 
-from fastapi.templating import Jinja2Templates
-
-
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
 
 app = FastAPI()
-templates = Jinja2Templates(directory="templates")
 
-class CalculoInput(BaseModel):
-    consumo_kwh: float = Field(..., gt=0, le=100000, description="Consumo mensal em kWh")
-    irradiancia: float = Field(..., gt=0, le=20, description="Irradiância solar média diária em kWh/m²/dia")
-    eficiencia_placa: float = Field(..., gt=0, le=1, description="Eficiência da placa (ex: 0.18 para 18%)")
-    perdas: float = Field(..., ge=0, le=1, description="Perdas no sistema (ex: 0.15 para 15%)")
-    potencia_placa_kw: float = Field(..., gt=0, description="Potência da placa em kW (ex: 0.33 para 330W)")
-class CalculoOutput(BaseModel):
-    placas_necessarias: float
-    potencia_total_kw: float
-    observacao: str
+class CalculoRequest(BaseModel):
+    consumo_mensal_kwh: float = Field(..., gt=0)
+    irradiacao_media_diaria: float = Field(..., gt=0)
+    potencia_placa_w: float = Field(default=340, gt=0)
+    eficiencia_sistema: float = Field(default=0.8, gt=0, le=1)
 
-@app.get("/", response_class=HTMLResponse)
-def read_index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+class CalculoResponse(BaseModel):
+    placas_necessarias: int
+    potencia_sistema_kw: float
 
-@app.post("/consumo")
-def consumo(calculator: CalculoInput):
-    try:
-        media_dia = calculator.consumo_kwh  / 30
+@app.post("/calculo-placas", response_model=CalculoResponse)  # <-- aqui corrigido
+def calcula_placas(data: CalculoRequest):
+    energia_diaria_necessaria = data.consumo_mensal_kwh / 30
+    energia_necessaria_com_eficiencia = energia_diaria_necessaria / data.eficiencia_sistema
+    placas = energia_necessaria_com_eficiencia / (data.irradiacao_media_diaria * (data.potencia_placa_w / 1000))
+    placas_necessarias = int(placas) + (1 if placas % 1 > 0 else 0)
 
-        placas = media_dia / (calculator.irradiancia * calculator.eficiencia_placa * (1 - calculator.perdas))
-        potencia_total = placas * calculator.potencia_placa_kw
+    potencia_sistema_kw = placas_necessarias * (data.potencia_placa_w / 1000)
 
-        return {
-            "placas_necessarias": placas,
-            "potencia_total_kw": potencia_total,
-            "observacao": "Estimativa baseada nos dados fornecidos."
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Erro no cálculo: {str(e)}")
-        
+    return CalculoResponse(
+        placas_necessarias=placas_necessarias,
+        potencia_sistema_kw=round(potencia_sistema_kw, 2)
+    )
